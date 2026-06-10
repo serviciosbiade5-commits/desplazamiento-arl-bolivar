@@ -85,6 +85,66 @@ USUARIOS = {
 ARCHIVO_RESPUESTAS = "respuestas_desplazamiento.xlsx"
 TOLERANCIA = 500
 
+# ─── GENERAR PLANTILLA EXCEL ──────────────────────────────────────────────────
+def generar_plantilla():
+    import openpyxl
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    import io
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "PLANTILLA DESPLAZAMIENTO"
+
+    campos = [
+        "Documento de identidad", "Codigo Sipab", "Nombre PGR",
+        "Fecha (DD/MM/AAAA)", "Nombre AGR", "Empresa Cliente",
+        "Cronograma", "Secuencia", "Empresa de transporte",
+        "Recorrido (Ida / Ida y vuelta)", "Origen", "Destino",
+        "Hora Inicio (HH:MM)", "Hora Fin (HH:MM)", "Frecuencia",
+        "Valor Pasajes Intermunicipal", "Transporte Interno",
+        "Desayuno", "Almuerzo/Cena", "Hospedaje",
+        "Detalles de las rutas",
+    ]
+    ejemplos = [
+        "1012345678", "7643", "JUAN PEREZ", "04/06/2026",
+        "MARIA GOMEZ", "BOLIVAR S.A.", "100001", "1",
+        "EXPRESO BOGOTA", "Ida y vuelta", "BOGOTA", "MEDELLIN",
+        "06:00", "10:00", "Unica visita",
+        "150000", "30000", "10000", "15000", "0",
+        "Ruta por autopista principal",
+    ]
+
+    hf  = PatternFill(start_color="003087", end_color="003087", fill_type="solid")
+    ef  = PatternFill(start_color="EBF2FF", end_color="EBF2FF", fill_type="solid")
+    brd = Border(left=Side(style="thin"), right=Side(style="thin"),
+                 top=Side(style="thin"),  bottom=Side(style="thin"))
+
+    for i, campo in enumerate(campos, 1):
+        c = ws.cell(row=1, column=i, value=campo)
+        c.fill      = hf
+        c.font      = Font(color="FFFFFF", bold=True, size=11)
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border    = brd
+        ws.column_dimensions[get_column_letter(i)].width = max(len(campo) + 4, 20)
+
+    for i, ej in enumerate(ejemplos, 1):
+        c = ws.cell(row=2, column=i, value=ej)
+        c.fill      = ef
+        c.font      = Font(color="555555", italic=True, size=10)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border    = brd
+
+    ws.row_dimensions[1].height = 40
+    ws.row_dimensions[2].height = 25
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+
 # ─── SESIÓN ───────────────────────────────────────────────────────────────────
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
@@ -219,7 +279,18 @@ def vista_registrador():
             st.markdown('<div class="section-title">📤 Cargue de Información</div>', unsafe_allow_html=True)
             cargue_masivo = st.radio("¿Desea realizar un cargue masivo?", ["No","Sí"], horizontal=True)
             if cargue_masivo == "Sí":
-                st.file_uploader("Subir archivo", type=["xlsx","xls","csv"])
+                st.download_button(
+                    label="⬇️ Descargar Plantilla Excel",
+                    data=generar_plantilla(),
+                    file_name="plantilla_desplazamiento.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                archivo_cargue = st.file_uploader("Subir archivo diligenciado", type=["xlsx","xls","csv"])
+                if archivo_cargue is not None:
+                    enviar_masivo = st.button("📤 Enviar Cargue Masivo", key="btn_masivo")
+                    if enviar_masivo:
+                        st.session_state["procesar_masivo"] = True
+                        st.session_state["archivo_masivo_data"] = archivo_cargue.read()
             st.markdown('</div>', unsafe_allow_html=True)
 
             # DATOS PGR
@@ -269,6 +340,95 @@ def vista_registrador():
             st.markdown('</div>', unsafe_allow_html=True)
 
             submitted = st.form_submit_button("✅ Enviar Registro")
+
+        # ── PROCESAR CARGUE MASIVO ────────────────────────────────────────
+        if st.session_state.get("procesar_masivo") and st.session_state.get("archivo_masivo_data"):
+            st.markdown("---")
+            st.markdown("### 📤 Procesando Cargue Masivo")
+            try:
+                import io
+                df_masivo = pd.read_excel(io.BytesIO(st.session_state["archivo_masivo_data"]), engine="openpyxl")
+                st.session_state["procesar_masivo"] = False
+                st.session_state["archivo_masivo_data"] = None
+                df_masivo.columns = df_masivo.columns.str.strip()
+
+                # Quitar fila de ejemplo si tiene datos de ejemplo
+                df_masivo = df_masivo[df_masivo.iloc[:, 0].astype(str).str.strip() != "1012345678"]
+                df_masivo = df_masivo.dropna(how="all")
+
+                errores = []
+                guardados = 0
+
+                for i, fila in df_masivo.iterrows():
+                    doc  = str(fila.get("Documento de identidad", "")).strip()
+                    pgr  = str(fila.get("Nombre PGR", "")).strip()
+                    orig = str(fila.get("Origen", "")).strip().upper()
+                    dest = str(fila.get("Destino", "")).strip().upper()
+                    rec  = str(fila.get("Recorrido (Ida / Ida y vuelta)", "")).strip()
+
+                    if not doc or not pgr:
+                        errores.append(f"Fila {i+2}: Documento o Nombre PGR vacío")
+                        continue
+
+                    try:
+                        vp  = float(str(fila.get("Valor Pasajes Intermunicipal", 0)).replace(",","") or 0)
+                        ti  = float(str(fila.get("Transporte Interno", 0)).replace(",","") or 0)
+                        des = float(str(fila.get("Desayuno", 0)).replace(",","") or 0)
+                        alm = float(str(fila.get("Almuerzo/Cena", 0)).replace(",","") or 0)
+                        hos = float(str(fila.get("Hospedaje", 0)).replace(",","") or 0)
+                    except:
+                        errores.append(f"Fila {i+2}: Error en valores numéricos")
+                        continue
+
+                    total_fila = vp + ti + des + alm + hos
+                    res3, tarifa, msg3 = validar_tarifa(df_desp, orig, dest, rec, vp, ti)
+
+                    datos = {
+                        "Marca temporal":               datetime.now(),
+                        "Registrado por":               st.session_state.usuario_id,
+                        "Cargue masivo":                "Sí",
+                        "Documento de identidad":       doc,
+                        "Codigo Sipab":                 str(fila.get("Codigo Sipab", "")).strip(),
+                        "Nombre PGR":                   pgr,
+                        "Fecha":                        fila.get("Fecha (DD/MM/AAAA)", ""),
+                        "Nombre AGR":                   str(fila.get("Nombre AGR", "")).strip(),
+                        "Empresa Cliente":              str(fila.get("Empresa Cliente", "")).strip(),
+                        "Cronograma":                   str(fila.get("Cronograma", "")).strip(),
+                        "Secuencia":                    str(fila.get("Secuencia", "")).strip(),
+                        "Empresa":                      str(fila.get("Empresa de transporte", "")).strip(),
+                        "Recorrido":                    rec,
+                        "Origen":                       orig,
+                        "Destino":                      dest,
+                        "Hora Inicio":                  str(fila.get("Hora Inicio (HH:MM)", "")).strip(),
+                        "Hora Fin":                     str(fila.get("Hora Fin (HH:MM)", "")).strip(),
+                        "Frecuencia":                   str(fila.get("Frecuencia", "")).strip(),
+                        "Valor Pasajes":                vp,
+                        "Transporte Interno":           ti,
+                        "Desayuno":                     des,
+                        "Almuerzo/Cena":                alm,
+                        "Hospedaje":                    hos,
+                        "Detalles de las rutas":        str(fila.get("Detalles de las rutas", "")).strip(),
+                        "Total":                        total_fila,
+                        "Validacion tarifa":            res3,
+                        "Tarifa permitida":             tarifa,
+                        "Detalle validacion":           msg3,
+                        "Estado":                       "PENDIENTE",
+                        "Aprueba/No aprueba":           "",
+                        "Observacion validador":        "",
+                        "Validado por":                 "",
+                        "Fecha validacion":             "",
+                    }
+                    guardar_respuesta(datos)
+                    guardados += 1
+
+                st.success(f"✅ {guardados} registro(s) cargados exitosamente.")
+                if errores:
+                    st.warning("⚠️ Filas con errores:")
+                    for e in errores:
+                        st.write(f"- {e}")
+
+            except Exception as e:
+                st.error(f"❌ Error procesando el archivo: {e}")
 
         if submitted:
             if origen == "Seleccione..." or destino == "Seleccione...":
