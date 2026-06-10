@@ -274,24 +274,7 @@ def vista_registrador():
     with tab_form:
         with st.form("form_desplazamiento", clear_on_submit=True):
 
-            # CARGUE MASIVO
-            st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.markdown('<div class="section-title">📤 Cargue de Información</div>', unsafe_allow_html=True)
-            cargue_masivo = st.radio("¿Desea realizar un cargue masivo?", ["No","Sí"], horizontal=True)
-            if cargue_masivo == "Sí":
-                st.download_button(
-                    label="⬇️ Descargar Plantilla Excel",
-                    data=generar_plantilla(),
-                    file_name="plantilla_desplazamiento.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-                archivo_cargue = st.file_uploader("Subir archivo diligenciado", type=["xlsx","xls","csv"])
-                if archivo_cargue is not None:
-                    enviar_masivo = st.button("📤 Enviar Cargue Masivo", key="btn_masivo")
-                    if enviar_masivo:
-                        st.session_state["procesar_masivo"] = True
-                        st.session_state["archivo_masivo_data"] = archivo_cargue.read()
-            st.markdown('</div>', unsafe_allow_html=True)
+
 
             # DATOS PGR
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -341,145 +324,7 @@ def vista_registrador():
 
             submitted = st.form_submit_button("✅ Enviar Registro")
 
-        # ── PROCESAR CARGUE MASIVO ────────────────────────────────────────
-        if st.session_state.get("procesar_masivo") and st.session_state.get("archivo_masivo_data"):
-            st.markdown("---")
-            st.markdown("### 📤 Procesando Cargue Masivo")
-            try:
-                import io
-                df_masivo = pd.read_excel(io.BytesIO(st.session_state["archivo_masivo_data"]), engine="openpyxl")
-                st.session_state["procesar_masivo"] = False
-                st.session_state["archivo_masivo_data"] = None
-                df_masivo.columns = df_masivo.columns.str.strip()
-
-                # Quitar fila de ejemplo si tiene datos de ejemplo
-                df_masivo = df_masivo[df_masivo.iloc[:, 0].astype(str).str.strip() != "1012345678"]
-                df_masivo = df_masivo.dropna(how="all")
-
-                errores = []
-                guardados = 0
-
-                for i, fila in df_masivo.iterrows():
-                    doc  = str(fila.get("Documento de identidad", "")).strip()
-                    pgr  = str(fila.get("Nombre PGR", "")).strip()
-                    orig = str(fila.get("Origen", "")).strip().upper()
-                    dest = str(fila.get("Destino", "")).strip().upper()
-                    rec  = str(fila.get("Recorrido (Ida / Ida y vuelta)", "")).strip()
-
-                    if not doc or not pgr:
-                        errores.append(f"Fila {i+2}: Documento o Nombre PGR vacío")
-                        continue
-
-                    try:
-                        vp  = float(str(fila.get("Valor Pasajes Intermunicipal", 0)).replace(",","") or 0)
-                        ti  = float(str(fila.get("Transporte Interno", 0)).replace(",","") or 0)
-                        des = float(str(fila.get("Desayuno", 0)).replace(",","") or 0)
-                        alm = float(str(fila.get("Almuerzo/Cena", 0)).replace(",","") or 0)
-                        hos = float(str(fila.get("Hospedaje", 0)).replace(",","") or 0)
-                    except:
-                        errores.append(f"Fila {i+2}: Error en valores numéricos")
-                        continue
-
-                    total_fila = vp + ti + des + alm + hos
-                    res3, tarifa, msg3 = validar_tarifa(df_desp, orig, dest, rec, vp, ti)
-
-                    datos = {
-                        "Marca temporal":               datetime.now(),
-                        "Registrado por":               st.session_state.usuario_id,
-                        "Cargue masivo":                "Sí",
-                        "Documento de identidad":       doc,
-                        "Codigo Sipab":                 str(fila.get("Codigo Sipab", "")).strip(),
-                        "Nombre PGR":                   pgr,
-                        "Fecha":                        fila.get("Fecha (DD/MM/AAAA)", ""),
-                        "Nombre AGR":                   str(fila.get("Nombre AGR", "")).strip(),
-                        "Empresa Cliente":              str(fila.get("Empresa Cliente", "")).strip(),
-                        "Cronograma":                   str(fila.get("Cronograma", "")).strip(),
-                        "Secuencia":                    str(fila.get("Secuencia", "")).strip(),
-                        "Empresa":                      str(fila.get("Empresa de transporte", "")).strip(),
-                        "Recorrido":                    rec,
-                        "Origen":                       orig,
-                        "Destino":                      dest,
-                        "Hora Inicio":                  str(fila.get("Hora Inicio (HH:MM)", "")).strip(),
-                        "Hora Fin":                     str(fila.get("Hora Fin (HH:MM)", "")).strip(),
-                        "Frecuencia":                   str(fila.get("Frecuencia", "")).strip(),
-                        "Valor Pasajes":                vp,
-                        "Transporte Interno":           ti,
-                        "Desayuno":                     des,
-                        "Almuerzo/Cena":                alm,
-                        "Hospedaje":                    hos,
-                        "Detalles de las rutas":        str(fila.get("Detalles de las rutas", "")).strip(),
-                        "Total":                        total_fila,
-                        "Validacion tarifa":            res3,
-                        "Tarifa permitida":             tarifa,
-                        "Detalle validacion":           msg3,
-                        "Estado":                       "PENDIENTE",
-                        "Aprueba/No aprueba":           "",
-                        "Observacion validador":        "",
-                        "Validado por":                 "",
-                        "Fecha validacion":             "",
-                    }
-                    guardar_respuesta(datos)
-                    guardados += 1
-
-                st.success(f"✅ {guardados} registro(s) cargados exitosamente.")
-                if errores:
-                    st.warning("⚠️ Filas con errores:")
-                    for e in errores:
-                        st.write(f"- {e}")
-
-            except Exception as e:
-                st.error(f"❌ Error procesando el archivo: {e}")
-
-        if submitted:
-            if origen == "Seleccione..." or destino == "Seleccione...":
-                st.error("⚠️ Selecciona Origen y Destino.")
-            elif not nombre_pgr or not documento:
-                st.error("⚠️ Documento y Nombre PGR son obligatorios.")
-            else:
-                # Validación automática tarifa
-                res3, tarifa, msg3 = validar_tarifa(df_desp, origen, destino, recorrido, val_pasajes, transporte_interno)
-
-                datos = {
-                    "Marca temporal":               datetime.now(),
-                    "Registrado por":               st.session_state.usuario_id,
-                    "Cargue masivo":                cargue_masivo,
-                    "Documento de identidad":       documento,
-                    "Código Sipab":                 codigo_sipab,
-                    "Nombre PGR":                   nombre_pgr,
-                    "Fecha":                        fecha,
-                    "Nombre AGR":                   nombre_agr,
-                    "Empresa Cliente":              empresa_cliente,
-                    "Cronograma":                   cronograma,
-                    "Secuencia":                    secuencia,
-                    "Empresa":                      empresa,
-                    "Recorrido":                    recorrido,
-                    "Origen":                       origen,
-                    "Destino":                      destino,
-                    "Hora Inicio":                  str(hora_inicio),
-                    "Hora Fin":                     str(hora_fin),
-                    "Frecuencia":                   frecuencia,
-                    "Valor Pasajes":                val_pasajes,
-                    "Transporte Interno":           transporte_interno,
-                    "Desayuno":                     desayuno_val,
-                    "Almuerzo/Cena":                almuerzo_cena_val,
-                    "Hospedaje":                    hospedaje_val,
-                    "Detalles de las rutas":        detalles_rutas,
-                    "Total":                        total,
-                    "Validación tarifa":            res3,
-                    "Tarifa permitida":             tarifa,
-                    "Detalle validación":           msg3,
-                    "Estado":                       "PENDIENTE",
-                    "Aprueba/No aprueba":           "",
-                    "Observación validador":        "",
-                    "Validado por":                 "",
-                    "Fecha validación":             "",
-                }
-                guardar_respuesta(datos)
-
-                css = "val-aprobado" if res3 == "APROBADO" else "val-nocumple"
-                st.markdown(f'<div class="{css}">🔍 <b>Validación automática de tarifa:</b> {res3} — {msg3}</div>',
-                            unsafe_allow_html=True)
-                st.success("✅ Registro enviado. Quedará pendiente de aprobación por el validador.")
+        st.success("✅ Registro enviado. Quedará pendiente de aprobación por el validador.")
 
 
     with tab_masivo:
@@ -545,8 +390,7 @@ def vista_registrador():
                         datos = {
                             "Marca temporal":           datetime.now(),
                             "Registrado por":           st.session_state.usuario_id,
-                            "Cargue masivo":            "Sí",
-                            "Documento de identidad":   doc,
+                                    "Documento de identidad":   doc,
                             "Codigo Sipab":             str(fila.get("Codigo Sipab", "")).strip(),
                             "Nombre PGR":               pgr,
                             "Fecha":                    fila.get("Fecha (DD/MM/AAAA)", ""),
