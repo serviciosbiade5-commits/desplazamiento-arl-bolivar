@@ -269,7 +269,7 @@ def vista_registrador():
             st.session_state.autenticado = False
             st.rerun()
 
-    tab_form, tab_mis_registros = st.tabs(["📝 Nuevo Registro", "📋 Mis Registros"])
+    tab_form, tab_masivo, tab_mis_registros = st.tabs(["📝 Nuevo Registro", "📤 Cargue Masivo", "📋 Mis Registros"])
 
     with tab_form:
         with st.form("form_desplazamiento", clear_on_submit=True):
@@ -480,6 +480,117 @@ def vista_registrador():
                 st.markdown(f'<div class="{css}">🔍 <b>Validación automática de tarifa:</b> {res3} — {msg3}</div>',
                             unsafe_allow_html=True)
                 st.success("✅ Registro enviado. Quedará pendiente de aprobación por el validador.")
+
+
+    with tab_masivo:
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">📤 Cargue Masivo de Registros</div>', unsafe_allow_html=True)
+
+        st.markdown("**Paso 1 — Descarga la plantilla, diligénciala y vuelve aquí para subirla.**")
+        st.download_button(
+            label="⬇️ Descargar Plantilla Excel",
+            data=generar_plantilla(),
+            file_name="plantilla_desplazamiento.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_plantilla"
+        )
+
+        st.markdown("---")
+        st.markdown("**Paso 2 — Sube el archivo diligenciado.**")
+        archivo_masivo = st.file_uploader(
+            "Selecciona el archivo Excel",
+            type=["xlsx", "xls"],
+            key="uploader_masivo"
+        )
+
+        if archivo_masivo is not None:
+            st.markdown("**Paso 3 — Haz clic en Subir para guardar los registros.**")
+            if st.button("📤 Subir Registros", key="btn_subir_masivo"):
+                try:
+                    import io as _io
+                    df_masivo = pd.read_excel(_io.BytesIO(archivo_masivo.read()), engine="openpyxl")
+                    df_masivo.columns = df_masivo.columns.str.strip()
+                    # Quitar fila de ejemplo
+                    df_masivo = df_masivo[df_masivo.iloc[:, 0].astype(str).str.strip() != "1012345678"]
+                    df_masivo = df_masivo.dropna(how="all")
+
+                    errores  = []
+                    guardados = 0
+
+                    for i, fila in df_masivo.iterrows():
+                        doc = str(fila.get("Documento de identidad", "")).strip()
+                        pgr = str(fila.get("Nombre PGR", "")).strip()
+
+                        if not doc or doc == "nan" or not pgr or pgr == "nan":
+                            errores.append(f"Fila {i+2}: Documento o Nombre PGR vacío")
+                            continue
+
+                        orig = str(fila.get("Origen", "")).strip().upper()
+                        dest = str(fila.get("Destino", "")).strip().upper()
+                        rec  = str(fila.get("Recorrido (Ida / Ida y vuelta)", "")).strip()
+
+                        try:
+                            vp  = float(str(fila.get("Valor Pasajes Intermunicipal", 0) or 0).replace(",","").replace("$",""))
+                            ti  = float(str(fila.get("Transporte Interno", 0) or 0).replace(",","").replace("$",""))
+                            des = float(str(fila.get("Desayuno", 0) or 0).replace(",","").replace("$",""))
+                            alm = float(str(fila.get("Almuerzo/Cena", 0) or 0).replace(",","").replace("$",""))
+                            hos = float(str(fila.get("Hospedaje", 0) or 0).replace(",","").replace("$",""))
+                        except:
+                            errores.append(f"Fila {i+2}: Error en valores numéricos")
+                            continue
+
+                        total_fila = vp + ti + des + alm + hos
+                        res3, tarifa, msg3 = validar_tarifa(df_desp, orig, dest, rec, vp, ti)
+
+                        datos = {
+                            "Marca temporal":           datetime.now(),
+                            "Registrado por":           st.session_state.usuario_id,
+                            "Cargue masivo":            "Sí",
+                            "Documento de identidad":   doc,
+                            "Codigo Sipab":             str(fila.get("Codigo Sipab", "")).strip(),
+                            "Nombre PGR":               pgr,
+                            "Fecha":                    fila.get("Fecha (DD/MM/AAAA)", ""),
+                            "Nombre AGR":               str(fila.get("Nombre AGR", "")).strip(),
+                            "Empresa Cliente":          str(fila.get("Empresa Cliente", "")).strip(),
+                            "Cronograma":               str(fila.get("Cronograma", "")).strip(),
+                            "Secuencia":                str(fila.get("Secuencia", "")).strip(),
+                            "Empresa":                  str(fila.get("Empresa de transporte", "")).strip(),
+                            "Recorrido":                rec,
+                            "Origen":                   orig,
+                            "Destino":                  dest,
+                            "Hora Inicio":              str(fila.get("Hora Inicio (HH:MM)", "")).strip(),
+                            "Hora Fin":                 str(fila.get("Hora Fin (HH:MM)", "")).strip(),
+                            "Frecuencia":               str(fila.get("Frecuencia", "")).strip(),
+                            "Valor Pasajes":            vp,
+                            "Transporte Interno":       ti,
+                            "Desayuno":                 des,
+                            "Almuerzo/Cena":            alm,
+                            "Hospedaje":                hos,
+                            "Detalles de las rutas":    str(fila.get("Detalles de las rutas", "")).strip(),
+                            "Total":                    total_fila,
+                            "Validacion tarifa":        res3,
+                            "Tarifa permitida":         tarifa,
+                            "Detalle validacion":       msg3,
+                            "Estado":                   "PENDIENTE",
+                            "Aprueba/No aprueba":       "",
+                            "Observacion validador":    "",
+                            "Validado por":             "",
+                            "Fecha validacion":         "",
+                        }
+                        guardar_respuesta(datos)
+                        guardados += 1
+
+                    if guardados > 0:
+                        st.success(f"✅ {guardados} registro(s) cargados exitosamente. Quedan pendientes de aprobación.")
+                    if errores:
+                        st.warning("⚠️ Las siguientes filas tuvieron errores y no se cargaron:")
+                        for e in errores:
+                            st.write(f"- {e}")
+
+                except Exception as e:
+                    st.error(f"❌ Error procesando el archivo: {e}")
+
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with tab_mis_registros:
         df = cargar_respuestas()
