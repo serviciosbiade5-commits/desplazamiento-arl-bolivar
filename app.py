@@ -55,8 +55,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 # ─── CONSTANTES ───────────────────────────────────────────────────────────────
 SHEET_ID   = "1dr2kyYtuTOZeFmrA5QhzdAq0BCMQ4VR7lfXNY0m0WeY"
 TOLERANCIA = 500
-SCOPES     = ["https://www.googleapis.com/auth/spreadsheets",
-              "https://www.googleapis.com/auth/drive"]
+SCOPES     = ["https://www.googleapis.com/auth/spreadsheets"]
 
 USUARIOS = {
     "123456789": ("123456789", "registrador", "Registrador"),
@@ -88,7 +87,7 @@ def conectar_sheets():
 
 def obtener_hoja():
     gc = conectar_sheets()
-    sh = gc.open("Registros Desplazamiento")
+    sh = gc.open_by_key(SHEET_ID)
     try:
         ws = sh.worksheet("Registros")
     except:
@@ -362,9 +361,7 @@ def vista_registrador():
                     "Fecha validacion":         "",
                 }
                 guardar_registro(datos)
-                css = "val-aprobado" if res3 == "APROBADO" else "val-nocumple"
-                st.markdown(f'<div class="{css}">🔍 <b>Validación tarifa:</b> {res3} — {msg3}</div>', unsafe_allow_html=True)
-                st.success("✅ Registro enviado. Pendiente de aprobación por el validador.")
+                st.success("✅ Registro enviado correctamente. Pendiente de aprobación.")
 
     # ── TAB CARGUE MASIVO ─────────────────────────────────────────────────────
     with tab_masivo:
@@ -520,23 +517,65 @@ def vista_validador():
                 for idx, row in pendientes.iterrows():
                     titulo = f"📄 {row.get('Nombre PGR','—')} | {row.get('Origen','—')} → {row.get('Destino','—')} | ${str(row.get('Total',0))} | {row.get('Fecha','')}"
                     with st.expander(titulo):
+                        # SECCIÓN 1: DATOS DEL PGR
+                        st.markdown("**👤 Datos del PGR**")
                         c1,c2,c3 = st.columns(3)
                         with c1:
                             st.markdown(f"**Documento:** {row.get('Documento de identidad','—')}")
                             st.markdown(f"**SIPAB:** {row.get('Codigo Sipab','—')}")
-                            st.markdown(f"**AGR:** {row.get('Nombre AGR','—')}")
+                            st.markdown(f"**Nombre PGR:** {row.get('Nombre PGR','—')}")
                         with c2:
+                            st.markdown(f"**AGR:** {row.get('Nombre AGR','—')}")
                             st.markdown(f"**Empresa Cliente:** {row.get('Empresa Cliente','—')}")
-                            st.markdown(f"**Cronograma:** {row.get('Cronograma','—')}")
-                            st.markdown(f"**Recorrido:** {row.get('Recorrido','—')}")
+                            st.markdown(f"**Fecha:** {row.get('Fecha','—')}")
                         with c3:
-                            st.markdown(f"**Pasajes:** ${row.get('Valor Pasajes',0)}")
-                            st.markdown(f"**Transporte:** ${row.get('Transporte Interno',0)}")
-                            st.markdown(f"**Total:** **${row.get('Total',0)}**")
+                            st.markdown(f"**Cronograma:** {row.get('Cronograma','—')}")
+                            st.markdown(f"**Secuencia:** {row.get('Secuencia','—')}")
+                            st.markdown(f"**Empresa transporte:** {row.get('Empresa','—')}")
 
-                        res3 = row.get("Validacion tarifa","—")
-                        css  = "val-aprobado" if res3 == "APROBADO" else "val-nocumple"
-                        st.markdown(f'<div class="{css}">🔍 <b>Validación tarifa:</b> {res3} — {row.get("Detalle validacion","")}</div>', unsafe_allow_html=True)
+                        st.markdown("---")
+
+                        # SECCIÓN 2: DATOS DEL DESPLAZAMIENTO
+                        st.markdown("**🚗 Datos del Desplazamiento**")
+                        c4,c5,c6 = st.columns(3)
+                        with c4:
+                            st.markdown(f"**Origen:** {row.get('Origen','—')}")
+                            st.markdown(f"**Destino:** {row.get('Destino','—')}")
+                        with c5:
+                            st.markdown(f"**Recorrido:** {row.get('Recorrido','—')}")
+                            st.markdown(f"**Frecuencia:** {row.get('Frecuencia','—')}")
+                        with c6:
+                            st.markdown(f"**Hora Inicio:** {row.get('Hora Inicio','—')}")
+                            st.markdown(f"**Hora Fin:** {row.get('Hora Fin','—')}")
+
+                        if row.get('Detalles de las rutas',''):
+                            st.markdown(f"**Detalles de ruta:** {row.get('Detalles de las rutas','—')}")
+
+                        st.markdown("---")
+
+                        # SECCIÓN 3: VALORES
+                        st.markdown("**💰 Valores**")
+                        c7,c8,c9,c10,c11 = st.columns(5)
+                        with c7:  st.metric("Pasajes",        f"${int(float(row.get('Valor Pasajes',0) or 0)):,}")
+                        with c8:  st.metric("T. Interno",     f"${int(float(row.get('Transporte Interno',0) or 0)):,}")
+                        with c9:  st.metric("Desayuno",       f"${int(float(row.get('Desayuno',0) or 0)):,}")
+                        with c10: st.metric("Almuerzo/Cena",  f"${int(float(row.get('Almuerzo/Cena',0) or 0)):,}")
+                        with c11: st.metric("Hospedaje",      f"${int(float(row.get('Hospedaje',0) or 0)):,}")
+                        st.markdown(f"**💵 Total: ${int(float(row.get('Total',0) or 0)):,}**")
+
+                        st.markdown("---")
+
+                        # SECCIÓN 4: VALIDACIONES
+                        st.markdown("**🔍 Resultados de Validación**")
+
+                        res3    = row.get("Validacion tarifa","—")
+                        tarifa  = row.get("Tarifa permitida","—")
+                        detalle = row.get("Detalle validacion","—")
+
+                        # Validación tarifa
+                        css3 = "val-aprobado" if res3 == "APROBADO" else "val-nocumple"
+                        icono3 = "✅" if res3 == "APROBADO" else "❌"
+                        st.markdown(f'<div class="{css3}">{icono3} <b>Tarifa establecida:</b> {res3}<br><small>{detalle} | Tarifa permitida: ${int(float(tarifa or 0)):,}</small></div>', unsafe_allow_html=True)
 
                         st.markdown("---")
                         obs = st.text_area("Observación", key=f"obs_{idx}", placeholder="Escribe una observación...")
