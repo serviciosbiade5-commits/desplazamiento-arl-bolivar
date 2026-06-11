@@ -88,7 +88,7 @@ def conectar_sheets():
 
 def obtener_hoja():
     gc = conectar_sheets()
-    sh = gc.open_by_key(SHEET_ID)
+    sh = gc.open("Registros Desplazamiento")
     try:
         ws = sh.worksheet("Registros")
     except:
