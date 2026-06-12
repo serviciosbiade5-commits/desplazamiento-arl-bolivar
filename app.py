@@ -143,6 +143,61 @@ def cargar_tarifas():
 
 df_desp, CIUDADES = cargar_tarifas()
 
+
+# ─── CARGAR PROGRAMACIÓN ──────────────────────────────────────────────────────
+@st.cache_data
+def cargar_programacion():
+    try:
+        df = pd.read_excel("Programacion_Adecco.xlsx", sheet_name="GLOBAL", engine="openpyxl")
+        df.columns = df.columns.str.strip().str.upper()
+        return df
+    except:
+        return pd.DataFrame()
+
+df_prog = cargar_programacion()
+
+def validar_global_autorizacion(df_p, cronograma):
+    if df_p.empty or not str(cronograma).strip():
+        return "NO CUMPLE", "No se pudo consultar el global (archivo no cargado o cronograma vacío)"
+    try:
+        crono_num = int(str(cronograma).strip())
+    except:
+        return "NO CUMPLE", "Cronograma inválido"
+    if "NUMERO_CRONOGRAMA" not in df_p.columns:
+        return "SIN DATOS", "Columna NUMERO_CRONOGRAMA no encontrada en el global"
+    fila = df_p[df_p["NUMERO_CRONOGRAMA"] == crono_num]
+    if fila.empty:
+        return "NO CUMPLE", f"Cronograma {crono_num} no encontrado en el global"
+    autoriza = str(fila.iloc[0].get("AUTORIZA_DESPLAZAMIENTO", "N")).strip().upper()
+    if autoriza in ["S","SI","SÍ","Y","YES","1"]:
+        return "CUMPLE", f"Cronograma {crono_num} tiene autorización de desplazamiento"
+    else:
+        return "NO CUMPLE", f"Cronograma {crono_num} NO tiene autorización (valor: {autoriza})"
+
+def validar_global_transporte(df_p, cronograma, val_pasajes, transporte_interno):
+    if df_p.empty or not str(cronograma).strip():
+        return "NO CUMPLE", "No se pudo consultar el global"
+    try:
+        crono_num = int(str(cronograma).strip())
+    except:
+        return "NO CUMPLE", "Cronograma inválido"
+    if "NUMERO_CRONOGRAMA" not in df_p.columns:
+        return "SIN DATOS", "Columna NUMERO_CRONOGRAMA no encontrada en el global"
+    fila = df_p[df_p["NUMERO_CRONOGRAMA"] == crono_num]
+    if fila.empty:
+        return "NO CUMPLE", f"Cronograma {crono_num} no encontrado en el global"
+    try:
+        valor_global = float(fila.iloc[0].get("VALOR_TRANSPORTE", 0) or 0)
+    except:
+        valor_global = 0
+    valor_solicitado = val_pasajes + transporte_interno
+    if valor_global <= 0:
+        return "SIN DATOS", f"El global no tiene valor de transporte para cronograma {crono_num}"
+    if valor_solicitado <= valor_global + 500:
+        return "CUMPLE", f"Valor solicitado ${valor_solicitado:,.0f} ≤ Valor global ${valor_global:,.0f}"
+    else:
+        return "NO CUMPLE", f"Valor ${valor_solicitado:,.0f} supera valor global ${valor_global:,.0f}"
+
 def validar_tarifa(origen, destino, recorrido, val_pasajes, transporte_interno):
     if df_desp.empty:
         return "SIN DATOS", None, "Tabla de tarifas no cargada"
@@ -568,14 +623,44 @@ def vista_validador():
                         # SECCIÓN 4: VALIDACIONES
                         st.markdown("**🔍 Resultados de Validación**")
 
-                        res3    = row.get("Validacion tarifa","—")
-                        tarifa  = row.get("Tarifa permitida","—")
-                        detalle = row.get("Detalle validacion","—")
+                        orig    = row.get("Origen","")
+                        dest    = row.get("Destino","")
+                        rec     = row.get("Recorrido","")
+                        crono   = row.get("Cronograma","")
 
-                        # Validación tarifa
-                        css3 = "val-aprobado" if res3 == "APROBADO" else "val-nocumple"
-                        icono3 = "✅" if res3 == "APROBADO" else "❌"
-                        st.markdown(f'<div class="{css3}">{icono3} <b>Tarifa establecida:</b> {res3}<br><small>{detalle} | Tarifa permitida: ${int(float(tarifa or 0)):,}</small></div>', unsafe_allow_html=True)
+                        try:
+                            vp_v = float(str(row.get("Valor Pasajes",0) or 0).replace(",",""))
+                            ti_v = float(str(row.get("Transporte Interno",0) or 0).replace(",",""))
+                        except:
+                            vp_v, ti_v = 0, 0
+
+                        # ── Validación 1: Autorización global ──────────────
+                        res1, msg1 = validar_global_autorizacion(df_prog, crono)
+                        css1  = "val-aprobado" if res1 == "CUMPLE" else "val-nocumple"
+                        ico1  = "✅" if res1 == "CUMPLE" else "❌"
+                        st.markdown(f'<div class="{css1}">{ico1} <b>Val. 1 — Autorización en el Global:</b> {res1}<br><small>{msg1}</small></div>', unsafe_allow_html=True)
+
+                        # ── Validación 2: Valor transporte global ───────────
+                        res2, msg2 = validar_global_transporte(df_prog, crono, vp_v, ti_v)
+                        css2  = "val-aprobado" if res2 == "CUMPLE" else "val-nocumple"
+                        ico2  = "✅" if res2 == "CUMPLE" else "❌"
+                        st.markdown(f'<div class="{css2}">{ico2} <b>Val. 2 — Valor de Transporte en el Global:</b> {res2}<br><small>{msg2}</small></div>', unsafe_allow_html=True)
+
+                        # ── Validación 3: Tarifa establecida ────────────────
+                        res3, tarifa, detalle = validar_tarifa(orig, dest, rec, vp_v, ti_v)
+                        css3  = "val-aprobado" if res3 == "APROBADO" else "val-nocumple"
+                        ico3  = "✅" if res3 == "APROBADO" else "❌"
+                        tarifa_str = f"${int(float(tarifa or 0)):,}" if tarifa else "N/A"
+                        st.markdown(f'<div class="{css3}">{ico3} <b>Val. 3 — Tarifa Establecida:</b> {res3}<br><small>{detalle} | Tarifa permitida: {tarifa_str}</small></div>', unsafe_allow_html=True)
+
+                        # ── Decisión final ──────────────────────────────────
+                        if res1 == "CUMPLE" and res2 == "CUMPLE" and res3 == "APROBADO":
+                            decision_auto = "✅ APROBAR"
+                            css_dec = "val-aprobado"
+                        else:
+                            decision_auto = "❌ NO APROBAR"
+                            css_dec = "val-nocumple"
+                        st.markdown(f'<div class="{css_dec}" style="margin-top:0.8rem; font-size:1rem;">🏁 <b>Decisión recomendada:</b> {decision_auto}</div>', unsafe_allow_html=True)
 
                         st.markdown("---")
                         obs = st.text_area("Observación", key=f"obs_{idx}", placeholder="Escribe una observación...")
